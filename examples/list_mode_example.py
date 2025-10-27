@@ -7,7 +7,7 @@ into spectral time series using rolling time windows.
 
 import numpy as np
 import matplotlib.pyplot as plt
-from gammaflow.core.time_series import SpectralTimeSeries
+from gammaflow import SpectralTimeSeries
 
 
 # ============================================

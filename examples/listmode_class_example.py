@@ -6,8 +6,7 @@ event-by-event gamma ray detection data.
 """
 
 import numpy as np
-from gammaflow.core.listmode import ListMode
-from gammaflow.core.time_series import SpectralTimeSeries
+from gammaflow import ListMode, SpectralTimeSeries
 
 
 # ============================================
