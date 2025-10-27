@@ -6,6 +6,19 @@ __pycache__/
 # C extensions
 *.so
 
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+bin/
+include/
+lib/
+lib64/
+share/
+pyvenv.cfg
+
 # Distribution / packaging
 .Python
 build/
@@ -14,15 +27,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
 wheels/
-bin/
-share/
-pyvenv.cfg
 *.egg-info/
 .installed.cfg
 *.egg

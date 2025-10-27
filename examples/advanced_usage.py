@@ -82,10 +82,16 @@ ts = SpectralTimeSeries(spectra)
 
 # Apply function to each spectrum
 def process_spectrum(spec: Spectrum) -> Spectrum:
-    """Normalize by live time and smooth."""
-    normalized = spec.normalize('live_time')
+    """Convert to count rate and smooth."""
+    # Use count_rate property for rate normalization
+    rate_spectrum = Spectrum(
+        counts=spec.count_rate,
+        energy_edges=spec.energy_edges,
+        uncertainty=spec.uncertainty / (spec.live_time if spec.live_time else spec.real_time),
+        metadata=spec.metadata
+    )
     # Could add smoothing here
-    return normalized
+    return rate_spectrum
 
 ts_processed = ts.apply_to_each(process_spectrum)
 print(f"Applied per-spectrum processing to {ts.n_spectra} spectra")
@@ -214,9 +220,9 @@ print(f"Area normalized: {np.sum(spec_area.counts):.6f} (should be 1.0)")
 spec_peak = spec.normalize('peak')
 print(f"Peak normalized: {np.max(spec_peak.counts):.6f} (should be 1.0)")
 
-# Live time normalization
-spec_lt = spec.normalize('live_time')
-print(f"Live time normalized: {np.sum(spec_lt.counts):.2f}")
+# Count rate calculation (replaces live_time normalization)
+count_rate = spec.count_rate
+print(f"Count rate: {np.sum(count_rate):.2f} counts/sec")
 
 # ============================================
 # Example 8: Uncertainty Propagation
@@ -302,9 +308,11 @@ print(f"Created time series: {ts}")
 print("\nStep 1: Applying calibration...")
 ts = ts.apply_calibration([0, 0.5, 0.0001])
 
-# Step 2: Normalize by live time
-print("Step 2: Normalizing by live time...")
-ts = ts.normalize('live_time')
+# Step 2: Convert to count rates
+print("Step 2: Converting to count rates...")
+# Use vectorized operation for count rate normalization
+times = np.array([s.live_time if s.live_time else s.real_time for s in ts])
+ts = ts.apply_vectorized(lambda counts: counts / times[:, np.newaxis])
 
 # Step 3: Background subtraction
 print("Step 3: Subtracting background...")
