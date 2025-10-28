@@ -82,6 +82,7 @@ data/
 *.npz
 *.hdf5
 *.h5
+output_plots/
 
 # Development documentation (not for git)
 docs/development/
