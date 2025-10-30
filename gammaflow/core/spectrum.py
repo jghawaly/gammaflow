@@ -697,6 +697,11 @@ class Spectrum:
         """
         Extract energy slice (returns new spectrum).
         
+        Note: This includes all bins that overlap with [e_min, e_max], 
+        including bins that are only partially within the range. This is
+        the standard behavior for histogram data. For finer control with
+        fractional bin overlap, use rebin_energy() with method='histogram'.
+        
         Parameters
         ----------
         e_min : float or None, optional
@@ -707,7 +712,13 @@ class Spectrum:
         Returns
         -------
         Spectrum
-            Sliced spectrum.
+            Sliced spectrum containing all bins that overlap with the range.
+            
+        Examples
+        --------
+        >>> # Bins: [0-10, 10-20, 20-30, 30-40]
+        >>> # Slice [15, 35] includes bins [10-20, 20-30, 30-40]
+        >>> sliced = spectrum.slice_energy(e_min=15, e_max=35)
         """
         edges = self.energy_edges
         
@@ -750,28 +761,57 @@ class Spectrum:
             New energy bin edges.
         method : str, optional
             Rebinning method:
-            - 'histogram': Conservative rebinning (exact for nested bins)
-            - 'linear': Linear interpolation of count density
+            - 'histogram': Exact count-conserving rebinning. Computes fractional 
+              overlap between old and new bins. Guarantees sum(new_counts) = sum(old_counts).
+            - 'linear': Linear interpolation of count density (non-conservative).
             Default is 'histogram'.
         
         Returns
         -------
         Spectrum
             Rebinned spectrum.
+            
+        Notes
+        -----
+        The 'histogram' method is physically correct for spectral data and guarantees
+        count conservation. The 'linear' method is faster but may not conserve total
+        counts and should only be used when smoothness is more important than exact
+        count conservation.
+        
+        Examples
+        --------
+        >>> # Rebin to coarser bins (count-conserving)
+        >>> new_edges = np.linspace(0, 3000, 513)  # Half as many bins
+        >>> rebinned = spectrum.rebin_energy(new_edges, method='histogram')
+        >>> assert np.isclose(rebinned.counts.sum(), spectrum.counts.sum())
         """
         new_edges = np.asarray(new_edges, dtype=float)
         old_edges = self.energy_edges
         old_counts = self._counts
         
         if method == 'histogram':
-            # Histogram rebinning (conserves counts for nested bins)
-            new_counts, _ = np.histogram(
-                old_edges[:-1],  # Use left edges as sample points
-                bins=new_edges,
-                weights=old_counts
-            )
-            # Need to handle overlaps properly
-            # This is approximate - for exact rebinning, need more sophisticated approach
+            # Histogram rebinning with proper count conservation
+            # For each new bin, compute weighted sum of overlapping old bins
+            n_new = len(new_edges) - 1
+            new_counts = np.zeros(n_new)
+            
+            for i in range(n_new):
+                new_left = new_edges[i]
+                new_right = new_edges[i + 1]
+                
+                # Find old bins that overlap with this new bin
+                for j in range(len(old_edges) - 1):
+                    old_left = old_edges[j]
+                    old_right = old_edges[j + 1]
+                    
+                    # Compute overlap
+                    overlap_left = max(new_left, old_left)
+                    overlap_right = min(new_right, old_right)
+                    
+                    if overlap_right > overlap_left:
+                        # There is overlap
+                        overlap_fraction = (overlap_right - overlap_left) / (old_right - old_left)
+                        new_counts[i] += old_counts[j] * overlap_fraction
         elif method == 'linear':
             # Interpolate count density
             old_centers = self.energy_centers

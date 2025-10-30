@@ -14,15 +14,21 @@ A Python library for working with time series of gamma ray spectra and listmode 
   - Uncertainty propagation (Poisson statistics by default)
   - Optional live_time (falls back to real_time for count rates)
   
-- **SpectralTimeSeries**: Efficient time series of spectra
-  - Shared calibration mode (memory efficient)
-  - Independent calibration mode (flexible)
-  - NumPy array integration for vectorized operations
-  - True Spectrum objects with individual metadata
-  - Copy-on-write for safe modifications
+- **Spectra**: Base class for collections of spectra (not time-ordered)
+  - Manages shared or independent energy calibration
+  - Vectorized access to counts via 2D NumPy array
+  - Statistical methods (mean, median, std, sum spectra)
+  - Automatic detection of compatible calibrations
+  - Individual Spectrum objects with metadata preserved
+  - NumPy array protocol support for advanced operations
+
+- **SpectralTimeSeries**: Time-ordered collection of spectra (inherits from Spectra)
+  - All Spectra features plus time-series specific functionality
   - Auto-detection of integration_time and stride_time
   - Reintegration to coarser time scales (multiples only)
   - Create from 2D arrays or list mode data
+  - Time-based slicing and filtering
+  - Copy-on-write for safe modifications
 
 - **ListMode**: Event-by-event data handling
   - Encapsulates time deltas and energies
@@ -37,6 +43,26 @@ A Python library for working with time series of gamma ray spectra and listmode 
   - Support for overlapping and non-consecutive ROIs
   - Track creation method (manual, peak search, censored windows, etc.)
   - Time series analysis with ROIs
+
+### Algorithms
+
+- **Censored Energy Window (CEW)**
+  - Gradient-based optimization for optimal energy window selection
+  - Maximizes signal-to-noise ratio for source detection
+  - Ridge regression predictor with constrained coefficients
+  - Score spectra for anomaly detection or source presence
+  - Convert optimized windows to EnergyROI objects
+  - Serializable predictors for deployment
+
+### Visualization
+
+- **Publication-quality plotting** with matplotlib and seaborn
+  - `plot_spectrum()`: Single spectrum with log scale, uncertainty bands
+  - `plot_count_rate_time_series()`: Total count rate vs time
+  - `plot_waterfall()`: 2D heatmap of spectral evolution (time vs energy)
+  - `plot_roi_time_series()`: Time evolution of specific energy ROIs
+  - `plot_spectrum_comparison()`: Compare multiple spectra
+  - Flexible styling and customization options
 
 ### Performance
 
@@ -172,6 +198,102 @@ plt.xlabel("Time (s)")
 plt.ylabel("K-40 Peak Counts")
 ```
 
+### Working with Spectra Collections
+
+```python
+from gammaflow import Spectra
+
+# Create a collection of spectra (not necessarily time-ordered)
+spectra_list = [
+    Spectrum(np.random.poisson(100, 1024), metadata={'sample': 'background'}),
+    Spectrum(np.random.poisson(120, 1024), metadata={'sample': 'source_1'}),
+    Spectrum(np.random.poisson(110, 1024), metadata={'sample': 'source_2'})
+]
+
+collection = Spectra(spectra_list)
+
+# Vectorized operations on all spectra
+background_subtracted = collection.counts - collection.counts[0]
+
+# Statistical analysis
+mean_spectrum = collection.mean_spectrum()
+median_spectrum = collection.median_spectrum()
+std_spectrum = collection.std_spectrum()
+total_spectrum = collection.sum_spectrum()
+
+# Access individual spectra with metadata
+for i, spec in enumerate(collection):
+    print(f"Sample {spec.metadata['sample']}: {np.sum(spec.counts)} counts")
+
+# NumPy protocol support
+stacked = np.array(collection)  # (n_spectra, n_bins)
+normalized = collection.counts / np.sum(collection.counts, axis=1, keepdims=True)
+```
+
+### Censored Energy Window (CEW) Algorithm
+
+```python
+from gammaflow.algorithms import optimize_cew_windows, fit_cew_predictor, CEWPredictor
+
+# Load training data: background spectra
+background_spectra = Spectra([...])  # Your background training data
+
+# Define expected source spectrum (or use measured/simulated)
+source_counts = np.loadtxt('cs137_spectrum.txt')
+source_spectrum = Spectrum(source_counts)
+
+# Get mean background for window optimization
+mean_background = background_spectra.mean_spectrum()
+
+# Step 1: Optimize window selection to maximize SNR
+window_mask = optimize_cew_windows(
+    source_spectrum=source_spectrum,
+    background_spectrum=mean_background,
+    method='gradient',  # Options: 'gradient', 'greedy', 'scipy'
+    learning_rate=0.01,
+    max_iterations=1000
+)
+
+print(f"Window bins: {np.sum(window_mask)} of {len(window_mask)}")
+
+# Step 2: Fit ridge regression predictor
+predictor = fit_cew_predictor(
+    background_spectra=background_spectra,
+    window_mask=window_mask,
+    alpha=1.0  # Ridge regularization
+)
+
+# Step 3: Score new observations
+test_spectrum = Spectrum(np.random.poisson(100, 1024))
+score = predictor.score(test_spectrum)
+print(f"CEW score: {score:.3f}")  # Higher = more anomalous
+
+# Score time series for anomaly detection
+# (monitoring for when a source appears)
+time_series = SpectralTimeSeries(...)  # Time-ordered measurements
+scores = predictor.score_time_series(time_series)
+
+# Detect anomalies (times when source appeared)
+threshold = np.percentile(scores, 99)  # 99th percentile
+anomaly_indices = np.where(scores > threshold)[0]
+anomaly_times = time_series.timestamps[anomaly_indices]
+print(f"Source detected at {len(anomaly_indices)} time points")
+print(f"Detection times: {anomaly_times}")
+
+# Convert optimized windows to ROIs
+rois = predictor.to_rois(energy_edges=test_spectrum.energy_edges)
+for roi in rois:
+    print(f"ROI {roi.label}: {roi.e_min:.1f} - {roi.e_max:.1f} keV")
+
+# Save predictor for later use
+predictor_dict = predictor.to_dict()
+np.savez('cew_predictor.npz', **predictor_dict)
+
+# Load and use
+loaded_dict = np.load('cew_predictor.npz')
+loaded_predictor = CEWPredictor.from_dict(loaded_dict)
+```
+
 ### Advanced Features
 
 ```python
@@ -187,7 +309,7 @@ peak_rois = [
     EnergyROI(e_min=1460, e_max=1462, label="K-40")  # Large gap
 ]
 
-# Censored Energy Windows for background estimation
+# Create ROI collection with metadata
 from gammaflow.operations import create_roi_collection
 
 censored = create_roi_collection([
@@ -202,6 +324,70 @@ spectral_std = np.std(ts.counts, axis=0)
 peak_locations = np.argmax(ts.counts, axis=1)
 ```
 
+### Visualization
+
+```python
+from gammaflow.visualization import (
+    plot_spectrum,
+    plot_count_rate_time_series,
+    plot_waterfall,
+    plot_roi_time_series,
+    plot_spectrum_comparison,
+)
+import matplotlib.pyplot as plt
+
+# Plot a single spectrum (log scale, with uncertainty)
+fig, ax = plot_spectrum(spectrum, log_y=True, show_uncertainty=True)
+plt.show()
+
+# Plot total count rate over time
+fig, ax = plot_count_rate_time_series(time_series, show_uncertainty=True)
+plt.show()
+
+# Create waterfall plot (2D heatmap: time vs energy)
+fig, ax = plot_waterfall(
+    time_series,
+    mode='count_rate',
+    log_scale=True,
+    cmap='viridis'
+)
+plt.show()
+
+# Plot time evolution of specific ROIs
+rois = [
+    EnergyROI(655, 668, label="Cs-137"),
+    EnergyROI(1450, 1470, label="K-40")
+]
+fig, ax = plot_roi_time_series(time_series, rois, mode='count_rate')
+plt.show()
+
+# Compare multiple spectra
+fig, ax = plot_spectrum_comparison(
+    [background, source],
+    labels=['Background', 'Source'],
+    log_y=True
+)
+plt.show()
+
+# Create multi-panel figure
+fig = plt.figure(figsize=(14, 10))
+
+ax1 = plt.subplot(2, 2, 1)
+plot_spectrum(spectrum, fig=fig, ax=ax1)
+ax1.set_title('Spectrum')
+
+ax2 = plt.subplot(2, 2, 2)
+plot_count_rate_time_series(time_series, fig=fig, ax=ax2)
+ax2.set_title('Count Rate vs Time')
+
+ax3 = plt.subplot(2, 1, 2)
+plot_waterfall(time_series, fig=fig, ax=ax3)
+ax3.set_title('Spectral Evolution')
+
+plt.tight_layout()
+plt.show()
+```
+
 ## Project Structure
 
 ```
@@ -212,11 +398,17 @@ gammaflow/
 │   │   ├── __init__.py
 │   │   ├── calibration.py
 │   │   ├── spectrum.py
-│   │   └── time_series.py
+│   │   ├── spectra.py
+│   │   ├── time_series.py
+│   │   └── listmode.py
 │   ├── operations/
 │   │   ├── __init__.py
 │   │   ├── energy.py
-│   │   └── temporal.py
+│   │   ├── temporal.py
+│   │   └── roi.py
+│   ├── algorithms/
+│   │   ├── __init__.py
+│   │   └── censored_energy_window.py
 │   ├── utils/
 │   │   ├── __init__.py
 │   │   └── exceptions.py
@@ -237,22 +429,39 @@ See the `examples/` directory for comprehensive examples:
 - `reintegrate_example.py` - Time resolution reintegration
 - `timing_inference_example.py` - Automatic timing detection
 - `roi_example.py` - Energy ROI analysis
+- `cew_example.py` - Censored Energy Window algorithm usage
+- `visualization_example.py` - Plotting spectra and time series
 
 ## Documentation
 
-- `PROJECT_OVERVIEW.md` - High-level architecture
-- `INSTALLATION.md` - Installation instructions
-- `REINTEGRATE_FEATURE.md` - Time reintegration details
-- `ROI_FEATURE.md` - Energy ROI documentation
-- `TIMING_INFERENCE_UPDATE.md` - Automatic timing detection
-- `tests/README.md` - Test suite documentation
+Documentation is integrated into docstrings throughout the codebase. Key concepts are explained in the README above. For detailed API documentation, use Python's built-in help:
+
+```python
+from gammaflow import Spectrum, Spectra, SpectralTimeSeries
+from gammaflow.algorithms import CEWPredictor
+
+help(Spectrum)
+help(Spectra)
+help(SpectralTimeSeries)
+help(CEWPredictor)
+```
 
 ## Key Concepts
 
+### Spectrum Collections
+- **Spectra**: Base class for non-time-ordered collections
+  - Shared or independent calibration modes
+  - Statistical methods (mean, median, std, sum)
+  - Individual metadata preservation
+- **SpectralTimeSeries**: Time-ordered subclass of Spectra
+  - All Spectra features plus time-specific functionality
+  - Automatic timing parameter detection
+
 ### Energy Calibration
 - Spectra can be calibrated (with energy_edges) or uncalibrated (channel mode)
-- Shared calibration in time series for memory efficiency
+- Shared calibration in collections for memory efficiency
 - Auto-detection of compatible calibrations
+- Copy-on-write for safe modifications
 
 ### Timing
 - `real_time`: Clock time (including dead time)
@@ -279,7 +488,15 @@ Run the test suite:
 pytest tests/ -v
 ```
 
-Current status: **287 tests passing** ✓
+Current status: **367+ tests passing** ✓
+
+Test coverage includes:
+- Core functionality (Spectrum, Spectra, SpectralTimeSeries, ListMode)
+- Energy operations (rebinning, calibration, ROIs)
+- Time series operations (reintegration, slicing, filtering)
+- Censored Energy Window algorithm
+- Shared calibration and copy-on-write behavior
+- NumPy interoperability
 
 ## License
 

@@ -14,6 +14,7 @@ import numpy as np
 import numpy.typing as npt
 
 from gammaflow.core.spectrum import Spectrum
+from gammaflow.core.spectra import Spectra
 from gammaflow.core.calibration import EnergyCalibration
 from gammaflow.utils.exceptions import TimeSeriesError, IncompatibleBinningError
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from gammaflow.core.listmode import ListMode
 
 
-class SpectralTimeSeries:
+class SpectralTimeSeries(Spectra):
     """
     Time series of gamma ray spectra.
     
@@ -101,48 +102,54 @@ class SpectralTimeSeries:
             spectra = []
         
         # If real_time provided, update all spectra
-        if real_time is not None:
+        if real_time is not None and len(spectra) > 0:
             spectra = self._apply_real_time_to_spectra(spectra, real_time)
         
         if len(spectra) == 0:
-            # Empty time series
+            # Empty time series - don't call parent __init__ (would raise error)
             self._spectra = []
             self._counts_array = np.array([]).reshape(0, 0)
+            self._n_spectra = 0
+            self._n_bins = 0
             self._timestamps = np.array([])
             self._live_times = np.array([])
             self._real_times = np.array([])
             self._shared_calibration = None
-            self._use_shared = False
+            self._calibration = None
             # Store integration and stride times for empty series
             self._integration_time = integration_time
             self._stride_time = stride_time
             return
         
-        # Validate all spectra have same number of bins
-        n_bins = spectra[0].n_bins
-        for i, spec in enumerate(spectra[1:], 1):
-            if spec.n_bins != n_bins:
-                raise TimeSeriesError(
-                    f"All spectra must have same number of bins. "
-                    f"Spectrum 0 has {n_bins}, spectrum {i} has {spec.n_bins}"
-                )
-        
-        # Determine calibration mode
+        # Auto-detect shared calibration if not specified
         if shared_calibration is None:
-            # Auto-detect: use shared if all have same edges
-            self._use_shared = self._can_use_shared_calibration(spectra)
-        else:
-            self._use_shared = shared_calibration
+            shared_calibration = self._can_use_shared_calibration(spectra)
         
-        # Setup storage based on calibration mode
-        if self._use_shared:
-            self._setup_shared_calibration(spectra)
+        # Initialize parent Spectra class
+        super().__init__(spectra, shared_calibration=shared_calibration)
+        
+        # Extract time-specific attributes from spectra
+        self._timestamps = np.array([s.timestamp if s.timestamp is not None else None for s in self._spectra])
+        
+        # Extract live_times and real_times
+        live_times_list = [s.live_time for s in self._spectra]
+        real_times_list = [s.real_time for s in self._spectra]
+        
+        # Handle None values in live_times
+        if all(lt is None for lt in live_times_list):
+            self._live_times = np.array([None] * len(self._spectra), dtype=object)
+        elif any(lt is None for lt in live_times_list):
+            # Mixed None and numeric - use object dtype
+            self._live_times = np.array(live_times_list, dtype=object)
         else:
-            self._setup_independent_calibrations(spectra)
+            # All numeric
+            self._live_times = np.array(live_times_list, dtype=float)
+        
+        self._real_times = np.array(real_times_list, dtype=float)
         
         # Infer or validate integration_time and stride_time
         self._integration_time, self._stride_time = self._infer_and_validate_timing(
-            spectra, integration_time, stride_time
+            self._spectra, integration_time, stride_time
         )
     
     def _apply_real_time_to_spectra(
@@ -293,6 +300,23 @@ class SpectralTimeSeries:
         
         return integration_time, stride_time
     
+    def _validate_spectra(self, spectra: List[Spectrum]) -> None:
+        """
+        Validate spectra for time series.
+        
+        Only validates matching bins, not matching calibrations (allows mixed calibrations).
+        """
+        if len(spectra) == 0:
+            return
+            
+        n_bins = spectra[0].n_bins
+        for i, spec in enumerate(spectra[1:], 1):
+            if spec.n_bins != n_bins:
+                raise TimeSeriesError(
+                    f"All spectra must have same number of bins. "
+                    f"Spectrum 0 has {n_bins}, spectrum {i} has {spec.n_bins}"
+                )
+    
     def _can_use_shared_calibration(self, spectra: List[Spectrum]) -> bool:
         """Check if all spectra have compatible energy edges."""
         if not spectra:
@@ -300,75 +324,24 @@ class SpectralTimeSeries:
         
         first_edges = spectra[0].energy_edges
         first_calibrated = spectra[0].is_calibrated
+        first_n_bins = spectra[0].n_bins
         
         for spectrum in spectra[1:]:
+            # Check if bin count matches (required for shared calibration)
+            if spectrum.n_bins != first_n_bins:
+                return False
+            
             # Check if calibration state matches
             if spectrum.is_calibrated != first_calibrated:
                 return False
             
             # Check if edges match
+            if len(spectrum.energy_edges) != len(first_edges):
+                return False
             if not np.allclose(spectrum.energy_edges, first_edges):
                 return False
         
         return True
-    
-    def _setup_shared_calibration(self, spectra: List[Spectrum]):
-        """Setup with shared energy calibration (memory efficient)."""
-        # Create shared calibration object
-        if spectra[0].is_calibrated:
-            edges = spectra[0].energy_edges.copy()
-        else:
-            edges = None
-        
-        self._shared_calibration = EnergyCalibration(edges, is_shared=True)
-        
-        # Extract data into arrays
-        self._counts_array = np.array([s._counts for s in spectra], dtype=float)
-        self._timestamps = np.array([s._timestamp for s in spectra])
-        # Handle optional live_times: use float if all are present, object if any None
-        live_times_list = [s._live_time for s in spectra]
-        if any(lt is None for lt in live_times_list):
-            self._live_times = np.array(live_times_list, dtype=object)
-        else:
-            self._live_times = np.array(live_times_list, dtype=float)
-        self._real_times = np.array([s._real_time for s in spectra], dtype=float)
-        
-        # Create Spectrum objects with VIEWS into the array
-        self._spectra = []
-        for i, spec in enumerate(spectra):
-            new_spec = Spectrum(
-                counts=self._counts_array[i],  # VIEW into array row
-                _calibration=self._shared_calibration,  # Shared reference
-                uncertainty=spec._uncertainty.copy() if spec._uncertainty is not None else None,
-                timestamp=spec._timestamp,
-                live_time=spec._live_time,
-                real_time=spec._real_time,
-                energy_unit=spec._energy_unit,
-                metadata=spec._metadata.copy(),
-                _is_view=True,  # Flag as view
-            )
-            self._spectra.append(new_spec)
-    
-    def _setup_independent_calibrations(self, spectra: List[Spectrum]):
-        """Setup with independent calibrations per spectrum."""
-        self._shared_calibration = None
-        
-        # Make deep copies
-        self._spectra = [s.copy(deep=True) for s in spectra]
-        
-        # Still create arrays for convenience (but these are separate from spectrum data)
-        self._counts_array = np.array([s._counts for s in self._spectra], dtype=float)
-        self._timestamps = np.array([s._timestamp for s in self._spectra])
-        # Handle optional live_times: use float if all are present, object if any None
-        live_times_list = [s._live_time for s in self._spectra]
-        if any(lt is None for lt in live_times_list):
-            self._live_times = np.array(live_times_list, dtype=object)
-        else:
-            self._live_times = np.array(live_times_list, dtype=float)
-        self._real_times = np.array([s._real_time for s in self._spectra], dtype=float)
-        
-        # Note: In independent mode, modifying _counts_array won't affect spectra
-        # Need to keep them in sync or rebuild array when needed
     
     # ========================================
     # Factory Methods
@@ -764,7 +737,7 @@ class SpectralTimeSeries:
         Direct access for vectorized operations. In shared calibration mode,
         modifications to this array affect individual Spectrum objects.
         """
-        if self._use_shared:
+        if self._shared_calibration:
             # Array is live - modifications affect spectra
             return self._counts_array
         else:
@@ -788,10 +761,10 @@ class SpectralTimeSeries:
         if len(self._spectra) == 0:
             raise TimeSeriesError("No spectra in time series")
         
-        if self._use_shared:
-            if self._shared_calibration.edges is None:
+        if self._shared_calibration:
+            if self._calibration is None or self._calibration.edges is None:
                 return np.arange(self.n_bins + 1, dtype=float)
-            return self._shared_calibration.edges
+            return self._calibration.edges
         else:
             # Return first spectrum's edges
             return self._spectra[0].energy_edges
@@ -820,7 +793,7 @@ class SpectralTimeSeries:
     @property
     def uses_shared_calibration(self) -> bool:
         """Check if this time series uses shared calibration."""
-        return self._use_shared
+        return self._shared_calibration
     
     @property
     def n_spectra(self) -> int:
@@ -889,7 +862,7 @@ class SpectralTimeSeries:
         elif isinstance(key, slice):
             return SpectralTimeSeries(
                 spectra=self._spectra[key],
-                shared_calibration=self._use_shared
+                shared_calibration=self._shared_calibration
             )
         else:
             raise TypeError(f"Invalid index type: {type(key)}")
@@ -922,7 +895,7 @@ class SpectralTimeSeries:
         SpectralTimeSeries
             New time series with calibrated spectra.
         """
-        if self._use_shared:
+        if self._shared_calibration:
             # Efficient: calibrate once, share result
             calibration = EnergyCalibration.from_coefficients(
                 self.n_bins, coefficients, model
@@ -948,7 +921,7 @@ class SpectralTimeSeries:
         
         return SpectralTimeSeries(
             spectra=calibrated_spectra,
-            shared_calibration=self._use_shared
+            shared_calibration=self._shared_calibration
         )
     
     def apply_calibration_(
@@ -974,12 +947,13 @@ class SpectralTimeSeries:
         SpectralTimeSeries
             Self (for chaining).
         """
-        if self._use_shared:
+        if self._shared_calibration:
             # Update shared calibration
             calibration = EnergyCalibration.from_coefficients(
                 self.n_bins, coefficients, model
             )
-            self._shared_calibration.edges = calibration.edges
+            # Simply update the edges on the existing shared calibration object
+            self._calibration.edges = calibration.edges
         else:
             # Update each independently
             for spectrum in self._spectra:
@@ -1006,7 +980,7 @@ class SpectralTimeSeries:
         SpectralTimeSeries
             New time series with shared calibration.
         """
-        if self._use_shared:
+        if self._shared_calibration:
             return self  # Already using shared calibration
         
         if target_edges is None:
@@ -1041,7 +1015,7 @@ class SpectralTimeSeries:
         SpectralTimeSeries
             New time series with independent calibrations.
         """
-        if not self._use_shared:
+        if not self._shared_calibration:
             return self  # Already independent
         
         # Create deep copies
@@ -1103,7 +1077,7 @@ class SpectralTimeSeries:
             )
             new_spectra.append(new_spec)
         
-        return SpectralTimeSeries(new_spectra, shared_calibration=self._use_shared)
+        return SpectralTimeSeries(new_spectra, shared_calibration=self._shared_calibration)
     
     def background_subtract(
         self,
@@ -1227,7 +1201,7 @@ class SpectralTimeSeries:
         else:
             new_spectra = [func(spec) for spec in self._spectra]
         
-        return SpectralTimeSeries(new_spectra, shared_calibration=self._use_shared)
+        return SpectralTimeSeries(new_spectra, shared_calibration=self._shared_calibration)
     
     def filter_spectra(
         self,
@@ -1252,7 +1226,7 @@ class SpectralTimeSeries:
         >>> ts_good = ts.filter_spectra(lambda s: s.live_time > 100)
         """
         filtered = [spec for spec in self._spectra if condition(spec)]
-        return SpectralTimeSeries(filtered, shared_calibration=self._use_shared)
+        return SpectralTimeSeries(filtered, shared_calibration=self._shared_calibration)
     
     # ========================================
     # Time Operations
@@ -1290,7 +1264,7 @@ class SpectralTimeSeries:
             mask &= self._timestamps <= t_max
         
         filtered_spectra = [spec for i, spec in enumerate(self._spectra) if mask[i]]
-        return SpectralTimeSeries(filtered_spectra, shared_calibration=self._use_shared)
+        return SpectralTimeSeries(filtered_spectra, shared_calibration=self._shared_calibration)
     
     def rebin_time(
         self,
@@ -1348,7 +1322,7 @@ class SpectralTimeSeries:
             summed._timestamp = t_win + integration_time / 2
             rebinned_spectra.append(summed)
         
-        return SpectralTimeSeries(rebinned_spectra, shared_calibration=self._use_shared)
+        return SpectralTimeSeries(rebinned_spectra, shared_calibration=self._shared_calibration)
     
     def reintegrate(
         self,
@@ -1465,7 +1439,7 @@ class SpectralTimeSeries:
         if len(self._spectra) == 0:
             return SpectralTimeSeries(
                 [],
-                shared_calibration=self._use_shared,
+                shared_calibration=self._shared_calibration,
                 integration_time=new_integration_time,
                 stride_time=new_stride_time
             )
@@ -1523,7 +1497,7 @@ class SpectralTimeSeries:
         
         return SpectralTimeSeries(
             reintegrated_spectra,
-            shared_calibration=self._use_shared,
+            shared_calibration=self._shared_calibration,
             integration_time=new_integration_time,
             stride_time=new_stride_time
         )
@@ -1584,16 +1558,43 @@ class SpectralTimeSeries:
             real_time=mean_real_time,
         )
     
-    def sum_spectrum(self) -> Spectrum:
+    def sum_spectrum(
+        self,
+        t_min: Optional[float] = None,
+        t_max: Optional[float] = None
+    ) -> Spectrum:
         """
         Compute sum of all spectra (returns single spectrum).
+        
+        Parameters
+        ----------
+        t_min : float or None, optional
+            Minimum timestamp. If None, sum from beginning.
+        t_max : float or None, optional
+            Maximum timestamp. If None, sum to end.
         
         Returns
         -------
         Spectrum
-            Summed spectrum.
+            Summed spectrum over the specified time range.
+            
+        Examples
+        --------
+        >>> # Sum entire time series
+        >>> total = time_series.sum_spectrum()
+        
+        >>> # Sum only between t=10 and t=20 seconds
+        >>> windowed = time_series.sum_spectrum(t_min=10, t_max=20)
+        
+        >>> # Sum around a specific time (e.g., source appearance)
+        >>> source_time = 39.4
+        >>> window = 2.0  # seconds
+        >>> source_spectrum = time_series.sum_spectrum(
+        ...     t_min=source_time - window/2,
+        ...     t_max=source_time + window/2
+        ... )
         """
-        return self.integrate_time()
+        return self.integrate_time(t_min, t_max)
     
     # ========================================
     # String Representation
@@ -1601,7 +1602,7 @@ class SpectralTimeSeries:
     
     def __repr__(self) -> str:
         """String representation."""
-        cal_mode = "shared" if self._use_shared else "independent"
+        cal_mode = "shared" if self._shared_calibration else "independent"
         cal_str = "calibrated" if self.is_calibrated else "uncalibrated"
         
         return (

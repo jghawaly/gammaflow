@@ -5,17 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gammaflow"
 version = "0.1.0"
-description = "A Python library for working with time series of gamma ray spectra"
+description = "A Python library for working with time series of gamma ray spectra and listmode data"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = {text = "BSD-3-Clause"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "James Ghawaly Jr.", email = "jamesghawaly@gmail.com"}
 ]
 dependencies = [
     "numpy>=1.20.0",
     "scipy>=1.7.0",
     "matplotlib>=3.3.0",
+    "seaborn>=0.11.0",
+    "tqdm>=4.62.0",
 ]
 
 [project.optional-dependencies]

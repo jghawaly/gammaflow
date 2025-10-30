@@ -190,6 +190,36 @@ class EnergyROI:
             method=data.get('method', 'manual'),
             metadata=data.get('metadata')
         )
+    
+    @classmethod
+    def from_cew_predictor(cls, predictor, labels: Optional[List[str]] = None) -> List['EnergyROI']:
+        """
+        Create EnergyROI objects from a CEWPredictor.
+        
+        This is a convenience method that calls predictor.to_rois(). It converts
+        the binary window mask from a Censored Energy Window predictor into
+        a list of contiguous ROI regions.
+        
+        Parameters
+        ----------
+        predictor : CEWPredictor
+            Fitted Censored Energy Window predictor from gammaflow.algorithms
+        labels : list of str, optional
+            Labels for each ROI. If None, auto-generated as "CEW Window 1", etc.
+        
+        Returns
+        -------
+        list of EnergyROI
+            List of ROI objects representing the censored energy windows
+            
+        Examples
+        --------
+        >>> from gammaflow.algorithms import optimize_cew_windows, fit_cew_predictor
+        >>> window_mask = optimize_cew_windows(source, background)
+        >>> predictor = fit_cew_predictor(bg_training, window_mask)
+        >>> rois = EnergyROI.from_cew_predictor(predictor)
+        """
+        return predictor.to_rois(labels=labels)
 
 
 def rebin_spectrum_rois(

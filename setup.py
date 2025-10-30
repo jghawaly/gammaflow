@@ -37,6 +37,7 @@ setup(
         "scipy>=1.7.0",
         "matplotlib>=3.3.0",
         "seaborn>=0.11.0",
+        "tqdm>=4.62.0",
     ],
     extras_require={
         "dev": [

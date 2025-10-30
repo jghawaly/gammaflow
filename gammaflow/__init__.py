@@ -3,6 +3,7 @@ GammaFlow: A Python library for working with time series of gamma ray spectra.
 """
 
 from gammaflow.core.spectrum import Spectrum
+from gammaflow.core.spectra import Spectra
 from gammaflow.core.time_series import SpectralTimeSeries
 from gammaflow.core.listmode import ListMode
 from gammaflow.utils.exceptions import (
@@ -12,12 +13,14 @@ from gammaflow.utils.exceptions import (
     IncompatibleBinningError,
 )
 
-# Make operations easily accessible
+# Make operations and algorithms easily accessible
 from gammaflow import operations
+from gammaflow import algorithms
 
 __version__ = "0.1.0"
 __all__ = [
     "Spectrum",
+    "Spectra",
     "SpectralTimeSeries",
     "ListMode",
     "GammaFlowError",
@@ -25,5 +28,6 @@ __all__ = [
     "CalibrationError",
     "IncompatibleBinningError",
     "operations",
+    "algorithms",
 ]
 
