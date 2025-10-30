@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="gammaflow",
-    version="0.1.0",
+    version="0.1.1",
     author="James Ghawaly Jr.",
     author_email="jamesghawaly@gmail.com",
     description="A Python library for working with time series of gamma ray spectra and listmode data",
