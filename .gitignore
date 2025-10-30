@@ -87,3 +87,7 @@ output_plots/
 # Development documentation (not for git)
 docs/development/
 
+# CEW algorithm (keep local only, not for git/pip)
+gammaflow/algorithms/censored_energy_window.py
+examples/cew_example.py
+
