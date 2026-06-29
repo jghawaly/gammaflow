@@ -50,6 +50,25 @@ This project (`gammaflow`) should not be confused with [GAMMA_FLOW](https://gith
   - Track creation method (manual, peak search, censored windows, etc.)
   - Time series analysis with ROIs
 
+### Simulation
+
+Scientifically-grounded synthetic data effects for robustness testing and
+augmentation (`gammaflow.simulation`).
+
+- **Temperature-induced gain drift**
+  - Temperature profile generators: constant, linear ramp, diurnal cycle,
+    Ornstein–Uhlenbeck (mean-reverting), first-order thermal lag, or a
+    measured/custom array
+  - Gain models (temperature → relative gain): linear (%/°C, with a NaI(Tl)
+    default), polynomial, or any callable
+  - Optional additive offset (zero) drift and temperature-dependent resolution
+    broadening (light-yield driven; add-only, never sharpens)
+  - Apply to a `Spectrum` / `SpectralTimeSeries` (counts redistributed on the
+    fixed energy grid) or directly to `ListMode` (exact per-event transform)
+  - Deterministic or stochastic (multinomial, integer-preserving)
+    redistribution; per-frame / per-event diagnostics (gain, offset, light
+    yield, spillover)
+
 ### Detection Algorithms
 
 All detectors inherit from `BaseDetector`, which provides a shared interface for
@@ -432,6 +451,43 @@ plt.tight_layout()
 plt.show()
 ```
 
+### Simulating Temperature-Induced Gain Drift
+
+```python
+from gammaflow import ListMode
+from gammaflow.simulation import temperature as temp
+from gammaflow.simulation.gain import (
+    LinearGainModel, ResolutionModel, TemperatureResponseModel,
+    apply_gain_shift, apply_temperature_drift,
+)
+
+# Quick single shift: peaks move to lower apparent energy at higher temperature
+shifted = apply_gain_shift(spectrum, relative_gain=0.97)
+
+# Build a temperature profile (ambient diurnal cycle -> crystal via thermal lag)
+times = time_series.timestamps
+crystal = temp.thermal_lag(
+    temp.diurnal(times, mean=25.0, amplitude=12.0, period=86400.0),
+    times, tau=300.0,                       # 5-min thermal time constant
+)
+
+# Gain + resolution response (offset_per_C defaults to 0 -> pure gain shift)
+model = TemperatureResponseModel(
+    gain=LinearGainModel(alpha_per_C=-0.004, t_ref=20.0),   # -0.4 %/°C
+    resolution=ResolutionModel(fwhm_ref_frac=0.07, e_ref=662.0),
+)
+
+# Drift a binned time series (counts redistributed on the fixed grid)
+drifted, diag = apply_temperature_drift(
+    time_series, crystal, model, return_diagnostics=True
+)
+print(diag['relative_gain'].min(), diag['spillover_fraction'].max())
+
+# Or apply exactly, per event, to list-mode data (no binning approximation).
+# Temperature may be a scalar, per-event array, callable, or (times, temps) pair.
+drifted_events = apply_temperature_drift(listmode, (times, crystal), model)
+```
+
 ## Project Structure
 
 ```
@@ -448,6 +504,9 @@ gammaflow/
 │   │   ├── energy.py
 │   │   ├── temporal.py
 │   │   └── roi.py
+│   ├── simulation/
+│   │   ├── temperature.py       # temperature profile generators
+│   │   └── gain.py              # gain/offset/resolution models + application
 │   ├── algorithms/
 │   │   ├── base.py              # BaseDetector, AlarmEvent
 │   │   ├── sad.py               # SADDetector (PCA)

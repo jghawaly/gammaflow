@@ -17,6 +17,7 @@ from gammaflow.utils.exceptions import (
 from gammaflow import operations
 from gammaflow import algorithms
 from gammaflow import datasets
+from gammaflow import simulation
 
 __version__ = "0.1.0"
 __all__ = [
@@ -31,5 +32,6 @@ __all__ = [
     "operations",
     "algorithms",
     "datasets",
+    "simulation",
 ]
 
